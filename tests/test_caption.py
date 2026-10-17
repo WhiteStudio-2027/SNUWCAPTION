@@ -94,10 +94,13 @@ class CaptionTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(r.json()['negative_supported'])
         self.assertEqual((await self.post(mode='unknown')).status_code, 422)
 
-    async def test_empty_generation_negative_is_not_silently_accepted(self):
+    async def test_missing_negative_preserves_positive_with_explicit_warning(self):
         self.chat_result = {'done': True, 'message': {'content': json.dumps({
             'caption': 'A person.', 'tags': ['solo'], 'negative_tags': [], 'uncertainties': []})}}
-        self.assertEqual((await self.post()).status_code, 502)
+        response = await self.post()
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['negative_complete'])
+        self.assertIn('negative_warning', response.json()['diagnostics'])
         self.assertEqual((await self.post(mode='training')).status_code, 200)
 
     async def test_conflicting_negative_is_removed(self):

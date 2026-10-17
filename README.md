@@ -109,3 +109,9 @@ PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
 - 캡션의 `diagnostics`에는 `positive_tags`, `caption_words`, `refinement_attempted`, `refinement_used`, `elapsed_seconds`가 포함됩니다. 이는 길이·처리 정보이며 화질/정확도 평가 점수가 아닙니다.
 
 서버에 소스(특히 service.py와 system_prompt.txt)를 모두 갱신하고 기존 프로세스를 종료한 뒤 `bash run.sh`로 재시작하세요. 원격 서버를 이 작업에서 자동으로 업데이트한 것은 아닙니다.
+
+## 0.3 호환 패치: 모델 출력 복구
+
+JSON 코드 블록, JSON 앞뒤 설명, `positive_prompt`/`negative_prompt` 필드, 쉼표 태그 문자열, 두 개의 긍정/부정 코드 블록을 정규화합니다. `uncertainties` 생략과 부가 설명 필드는 허용하지만, 숫자/객체를 태그로 변환하거나 잘린 JSON을 추측해서 완성하지 않습니다.
+
+긍정 설명이 유효하고 부정만 빠졌다면 기존 최대 한 번 보완 범위에서 재확인합니다. 계속 빠지면 긍정을 보존하고 `negative_complete=false`와 진단 경고를 반환합니다. 없는 부정 프롬프트를 생성했다고 표시하지 않습니다. 긍정 자체를 읽을 수 없으면 `invalid_json`, `missing_positive`, `schema_validation` 등 원인을 구분해 502를 반환합니다. 로그에 원본 응답이나 API 키는 기록하지 않습니다. 응답 계약은 호환되므로 api_version은 0.3.0을 유지합니다.

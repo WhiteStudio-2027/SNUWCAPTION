@@ -21,6 +21,7 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from .output import normalize_output, OutputError
 
 LOG = logging.getLogger('snuwcaption')
 API_VERSION = "0.3.0"
@@ -226,7 +227,7 @@ class Ollama:
         if data.get('done') is not True or data.get('done_reason') == 'length':
             raise HTTPException(502, 'Incomplete caption; retry with another model')
         try:
-            parsed = CaptionData.model_validate_json(data['message']['content'])
+            parsed = CaptionData.model_validate(normalize_output(data['message']['content']))
             caption = ' '.join(parsed.caption.split())
             tags = list(dict.fromkeys(' '.join(t.split()).strip(' ,') for t in parsed.tags))
             tags = [tag for tag in tags if tag]
@@ -235,30 +236,33 @@ class Ollama:
             negatives = list(dict.fromkeys(' '.join(t.split()).strip(' ,') for t in parsed.negative_tags if t.strip(' ,')))
             if any(len(t) > 160 for t in negatives) or any(len(t) > 500 for t in parsed.uncertainties):
                 raise ValueError('Oversized negative or uncertainty')
-            if mode == 'prompt' and pipeline != 'flux2_klein' and not negatives:
-                raise ValueError('Missing generation negative prompt')
             if mode == 'training' or pipeline == 'flux2_klein':
                 negatives = []
             # Exact duplicate concepts can never be both desired and prohibited.
             positives = {t.casefold() for t in tags}
             negatives = [t for t in negatives if t.casefold() not in positives]
-            if mode == "prompt" and pipeline != "flux2_klein" and not negatives:
-                raise ValueError("Negative prompt contradicts positive prompt")
             diagnostics = {'refinement_attempted': False, 'refinement_used': False}
-            if not refining and (len(tags) < (45 if mode == 'prompt' else 30) or len(caption.split()) < (180 if mode == 'prompt' else 100)):
+            if not refining and (len(tags) < (45 if mode == 'prompt' else 30) or len(caption.split()) < (180 if mode == 'prompt' else 100) or (mode == 'prompt' and pipeline != 'flux2_klein' and not negatives)):
                 diagnostics['refinement_attempted'] = True
                 try:
                     revised = await self.caption(model, image, subject, mode, pipeline, refining=True,
                         previous={'caption': caption, 'tags': tags, 'negative_tags': negatives})
-                    if len(revised[1]) + len(revised[0].split()) > len(tags) + len(caption.split()):
+                    if (not negatives and revised[2]) or len(revised[1]) + len(revised[0].split()) > len(tags) + len(caption.split()):
                         caption, tags, negatives, uncertainty, _ = revised
                         diagnostics['refinement_used'] = True
+                        if revised[4].get('negative_warning'):
+                            diagnostics['negative_warning'] = revised[4]['negative_warning']
                         return caption, tags, negatives, uncertainty, diagnostics
                 except HTTPException:
                     diagnostics['refinement_warning'] = 'Detail audit failed; initial valid result retained'
+            if mode == 'prompt' and pipeline != 'flux2_klein' and not negatives:
+                diagnostics['negative_warning'] = 'Negative prompt missing; valid positive retained for review'
+                LOG.warning('caption partial | reason=missing_negative')
             return caption, tags, negatives, parsed.uncertainties, diagnostics
         except (KeyError, TypeError, ValueError, ValidationError) as exc:
-            raise HTTPException(502, 'Model returned an invalid caption; try another vision model') from exc
+            reason = str(exc) if isinstance(exc, OutputError) else 'schema_validation' if isinstance(exc, ValidationError) else 'invalid_fields'
+            LOG.warning('caption rejected | reason=%s', reason)
+            raise HTTPException(502, 'Caption output rejected: ' + reason + '; no valid positive description received') from exc
 
 
 def create_app(settings: Settings, transport=None):
@@ -357,6 +361,7 @@ def create_app(settings: Settings, transport=None):
                         'caption': sentence, 'tags': tags, 'positive_prompt': ', '.join(tags) if format == 'tags' else sentence,
                         'negative_prompt': ', '.join(negatives), 'negative_tags': negatives,
                         'mode': mode, 'pipeline': pipeline, 'uncertainties': uncertainties,
+                        'negative_complete': bool(negatives) if mode == 'prompt' and pipeline != 'flux2_klein' else None,
                         'negative_supported': mode == 'prompt' and pipeline != 'flux2_klein', 'image': {'width': width, 'height': height}}
         except TimeoutError as exc:
             LOG.warning('caption timeout | id=%s', request_id)

@@ -44,7 +44,7 @@ def normalize_output(content):
             return [part.strip() for part in re.split(r'[,\n]+', item) if part.strip()]
         if not isinstance(item, list) or any(not isinstance(t, str) for t in item):
             raise OutputError('invalid_tag_type')
-        return item
+        return [phrase.strip() for entry in item for phrase in re.split(r'[,\n]+(?![^()]*\))', entry) if phrase.strip()]
 
     positive = value.get('positive_prompt', value.get('positive', ''))
     caption = value.get('caption') or positive

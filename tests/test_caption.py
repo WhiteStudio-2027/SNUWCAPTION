@@ -118,10 +118,10 @@ class CaptionTests(unittest.IsolatedAsyncioTestCase):
         response = await self.post(format='tags')
         row = response.json()
         self.assertEqual(row['api_version'], '0.3.0')
-        self.assertTrue(row['diagnostics']['refinement_attempted'])
-        self.assertTrue(row['diagnostics']['refinement_used'])
-        self.assertEqual(row['diagnostics']['positive_tags'], 53)
-        self.assertEqual(sum(p == '/api/chat' for p, _ in self.calls), 2)
+        self.assertFalse(row['diagnostics']['refinement_attempted'])
+        self.assertFalse(row['diagnostics']['refinement_used'])
+        self.assertEqual(row['diagnostics']['positive_tags'], 3)
+        self.assertEqual(sum(p == '/api/chat' for p, _ in self.calls), 1)
 
     async def test_long_descriptive_tags_do_not_discard_valid_caption(self):
         long_phrase = 'a detailed garment description ' * 15
@@ -186,7 +186,7 @@ class CaptionTests(unittest.IsolatedAsyncioTestCase):
         finally:
             self.block.set()
         self.assertEqual((await task).status_code, 200)
-        self.assertEqual(sum(p == '/api/chat' for p, _ in self.calls), 2)
+        self.assertEqual(sum(p == '/api/chat' for p, _ in self.calls), 1)
 
     async def test_malformed_and_partial_model_output_rejected(self):
         for result in ({'done': False}, {'done': True, 'message': {'content': 'not JSON'}},

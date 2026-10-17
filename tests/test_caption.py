@@ -28,6 +28,7 @@ class CaptionTests(unittest.IsolatedAsyncioTestCase):
             'caption': 'A character stands on a white background.',
             'tags': ['solo', 'standing', 'solo', 'white background'],
             'negative_tags': ['duplicate subject', 'watermark'], 'uncertainties': []})}}
+        self.audit_result = None
         self.block = None
         self.started = asyncio.Event()
 
@@ -42,7 +43,9 @@ class CaptionTests(unittest.IsolatedAsyncioTestCase):
                 self.started.set()
                 if self.block:
                     await self.block.wait()
-                return httpx.Response(200, json=self.chat_result)
+                payload = json.loads(request.content)
+                result = self.audit_result if self.audit_result is not None and "DETAIL AUDIT" in payload["messages"][1]["content"] else self.chat_result
+                return httpx.Response(200, json=result)
             return httpx.Response(404)
 
         self.app = create_app(Settings(KEY, deadline=1), httpx.MockTransport(handler))
@@ -83,7 +86,7 @@ class CaptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(prompt.json()['negative_supported'])
         self.assertIn('UNIVERSAL IMAGE PROMPT ENGINEERING SYSTEM', self.calls[-1][1]['messages'][0]['content'])
         self.assertEqual(len(self.calls[-1][1]['messages'][1]['images']), 3)
-        self.assertEqual(self.calls[-1][1]['options']['num_predict'], 2400)
+        self.assertEqual(self.calls[-1][1]['options']['num_predict'], 4096)
         for parameters in ({'mode': 'training'}, {'pipeline': 'flux2_klein'}):
             r = await self.post(**parameters)
             self.assertEqual(r.status_code, 200, r.text)
@@ -103,6 +106,19 @@ class CaptionTests(unittest.IsolatedAsyncioTestCase):
             'negative_tags': ['white background', 'duplicate subject'], 'uncertainties': []})}}
         response = await self.post()
         self.assertEqual(response.json()['negative_prompt'], 'duplicate subject')
+
+    async def test_detail_audit_is_bounded_and_reports_version(self):
+        self.audit_result = {'done': True, 'message': {'content': json.dumps({
+            'caption': 'A character with clearly described appearance and clothing.',
+            'tags': ['solo', 'standing', 'white background'] + ['visible detail ' + str(i) for i in range(50)],
+            'negative_tags': ['duplicate subject'], 'uncertainties': []})}}
+        response = await self.post(format='tags')
+        row = response.json()
+        self.assertEqual(row['api_version'], '0.3.0')
+        self.assertTrue(row['diagnostics']['refinement_attempted'])
+        self.assertTrue(row['diagnostics']['refinement_used'])
+        self.assertEqual(row['diagnostics']['positive_tags'], 53)
+        self.assertEqual(sum(p == '/api/chat' for p, _ in self.calls), 2)
 
     async def test_auth_before_image_or_backend_processing(self):
         r = await self.post(b'not image', key='wrong')
@@ -150,7 +166,7 @@ class CaptionTests(unittest.IsolatedAsyncioTestCase):
         finally:
             self.block.set()
         self.assertEqual((await task).status_code, 200)
-        self.assertEqual(sum(p == '/api/chat' for p, _ in self.calls), 1)
+        self.assertEqual(sum(p == '/api/chat' for p, _ in self.calls), 2)
 
     async def test_malformed_and_partial_model_output_rejected(self):
         for result in ({'done': False}, {'done': True, 'message': {'content': 'not JSON'}},

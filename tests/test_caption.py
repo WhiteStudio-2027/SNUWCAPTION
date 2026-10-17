@@ -123,6 +123,23 @@ class CaptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row['diagnostics']['positive_tags'], 53)
         self.assertEqual(sum(p == '/api/chat' for p, _ in self.calls), 2)
 
+    async def test_long_descriptive_tags_do_not_discard_valid_caption(self):
+        long_phrase = 'a detailed garment description ' * 15
+        self.chat_result = {'done': True, 'message': {'content': json.dumps({
+            'caption': 'A figure with a detailed layered outfit.', 'tags': [long_phrase],
+            'negative_tags': ['an unwanted clothing variation ' * 12],
+            'uncertainties': ['uncertain small detail ' * 30]})}}
+        response = await self.post(format='tags')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn(long_phrase.strip(), response.json()['positive_prompt'])
+        self.assertTrue(response.json()['negative_complete'])
+
+    async def test_field_error_is_specific_and_never_logs_content(self):
+        self.chat_result = {'done': True, 'message': {}}
+        response = await self.post()
+        self.assertEqual(response.status_code, 502)
+        self.assertIn('missing_message_content', response.json()['detail'])
+
     async def test_auth_before_image_or_backend_processing(self):
         r = await self.post(b'not image', key='wrong')
         self.assertEqual(r.status_code, 401)
@@ -173,7 +190,7 @@ class CaptionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_malformed_and_partial_model_output_rejected(self):
         for result in ({'done': False}, {'done': True, 'message': {'content': 'not JSON'}},
-                       {'done': True, 'message': {'content': '{"caption":"x","tags":[]}'}}):
+                       {'done': True, 'message': {'content': '{"caption":"","tags":[]}'}}):
             self.chat_result = result
             self.assertEqual((await self.post()).status_code, 502)
         self.chat_result = {'done': True, 'done_reason': 'length', 'message': {'content': '{}'}}

@@ -106,10 +106,10 @@ class Settings:
 
 class CaptionData(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
-    caption: str = Field(min_length=1, max_length=8000)
-    tags: list[str] = Field(min_length=1, max_length=160)
-    negative_tags: list[str] = Field(max_length=80)
-    uncertainties: list[str] = Field(max_length=30)
+    caption: str = Field(min_length=1, max_length=16000)
+    tags: list[str] = Field(min_length=1, max_length=512)
+    negative_tags: list[str] = Field(max_length=256)
+    uncertainties: list[str] = Field(max_length=64)
 
 
 def prepare_image(raw: bytes):
@@ -231,17 +231,28 @@ class Ollama:
             caption = ' '.join(parsed.caption.split())
             tags = list(dict.fromkeys(' '.join(t.split()).strip(' ,') for t in parsed.tags))
             tags = [tag for tag in tags if tag]
-            if not caption or not tags or any(len(t) > 160 for t in tags):
-                raise ValueError('Empty or oversized caption')
+            if not caption:
+                raise OutputError('empty_caption')
+            if not tags:
+                raise OutputError('empty_tags')
+            if len(caption.encode('utf-8')) > 16000 or len(', '.join(tags).encode('utf-8')) > 16000:
+                raise OutputError('positive_output_too_large')
             negatives = list(dict.fromkeys(' '.join(t.split()).strip(' ,') for t in parsed.negative_tags if t.strip(' ,')))
-            if any(len(t) > 160 for t in negatives) or any(len(t) > 500 for t in parsed.uncertainties):
-                raise ValueError('Oversized negative or uncertainty')
+            negative_oversized = len(', '.join(negatives).encode('utf-8')) > 16000
+            if negative_oversized:
+                negatives = []
+            uncertainty_truncated = any(len(t) > 2000 for t in parsed.uncertainties)
+            parsed.uncertainties = [t[:2000] for t in parsed.uncertainties]
             if mode == 'training' or pipeline == 'flux2_klein':
                 negatives = []
             # Exact duplicate concepts can never be both desired and prohibited.
             positives = {t.casefold() for t in tags}
             negatives = [t for t in negatives if t.casefold() not in positives]
             diagnostics = {'refinement_attempted': False, 'refinement_used': False}
+            if negative_oversized:
+                diagnostics['negative_warning'] = 'Oversized negative discarded; positive retained'
+            if uncertainty_truncated:
+                diagnostics['uncertainty_truncated'] = True
             if not refining and (len(tags) < (45 if mode == 'prompt' else 30) or len(caption.split()) < (180 if mode == 'prompt' else 100) or (mode == 'prompt' and pipeline != 'flux2_klein' and not negatives)):
                 diagnostics['refinement_attempted'] = True
                 try:
@@ -260,9 +271,12 @@ class Ollama:
                 LOG.warning('caption partial | reason=missing_negative')
             return caption, tags, negatives, parsed.uncertainties, diagnostics
         except (KeyError, TypeError, ValueError, ValidationError) as exc:
-            reason = str(exc) if isinstance(exc, OutputError) else 'schema_validation' if isinstance(exc, ValidationError) else 'invalid_fields'
+            reason = str(exc) if isinstance(exc, OutputError) else 'schema_validation' if isinstance(exc, ValidationError) else 'missing_message_content' if isinstance(exc, KeyError) else 'invalid_message_type' if isinstance(exc, TypeError) else 'invalid_value'
+            if isinstance(exc, ValidationError):
+                fields = sorted({str(e['loc'][0]) for e in exc.errors(include_input=False) if e['loc']})
+                reason += ':' + ','.join(fields)
             LOG.warning('caption rejected | reason=%s', reason)
-            raise HTTPException(502, 'Caption output rejected: ' + reason + '; no valid positive description received') from exc
+            raise HTTPException(502, 'Caption output rejected: ' + reason + '; see the caption service diagnostic code') from exc
 
 
 def create_app(settings: Settings, transport=None):
@@ -303,7 +317,7 @@ def create_app(settings: Settings, transport=None):
 
     @app.get('/health')
     async def health():
-        return {'status': 'ok', 'service': 'snuwcaption', 'api_version': API_VERSION}
+        return {'status': 'ok', 'service': 'snuwcaption', 'api_version': API_VERSION, 'build': 'output-limits-2'}
 
     @app.get('/v1/models')
     async def models(x_api_key: str = Header('')):

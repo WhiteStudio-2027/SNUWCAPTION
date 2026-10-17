@@ -49,6 +49,8 @@ def normalize_output(content):
     positive = value.get('positive_prompt', value.get('positive', ''))
     caption = value.get('caption') or positive
     tags = phrases(value.get('tags', positive or caption))
+    if not tags and isinstance(caption, str) and caption.strip():
+        tags = phrases(caption)
     if not caption and tags:
         caption = ', '.join(tags)
     negatives = phrases(value.get('negative_tags', value.get('negative_prompt', value.get('negative', []))))

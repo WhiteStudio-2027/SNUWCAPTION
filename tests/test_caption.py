@@ -26,7 +26,8 @@ class CaptionTests(unittest.IsolatedAsyncioTestCase):
         self.show_result = None
         self.chat_result = {'done': True, 'message': {'content': json.dumps({
             'caption': 'A character stands on a white background.',
-            'tags': ['solo', 'standing', 'solo', 'white background']})}}
+            'tags': ['solo', 'standing', 'solo', 'white background'],
+            'negative_tags': ['duplicate subject', 'watermark'], 'uncertainties': []})}}
         self.block = None
         self.started = asyncio.Event()
 
@@ -69,12 +70,39 @@ class CaptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(path, '/api/chat')
         self.assertFalse(payload['stream'])
         self.assertEqual(payload['keep_alive'], 0)
-        self.assertEqual(payload['format']['required'], ['caption', 'tags'])
+        self.assertEqual(payload['format']['required'], ['caption', 'tags', 'negative_tags', 'uncertainties'])
         encoded = payload['messages'][1]['images'][0]
         with Image.open(io.BytesIO(base64.b64decode(encoded))) as im:
             self.assertEqual(im.format, 'JPEG')
             self.assertTrue(all(c > 245 for c in im.getpixel((0, 0))))
             self.assertFalse(im.getexif())
+
+    async def test_generation_negatives_training_and_flux_contract(self):
+        prompt = await self.post(format='tags')
+        self.assertEqual(prompt.json()['negative_prompt'], 'duplicate subject, watermark')
+        self.assertTrue(prompt.json()['negative_supported'])
+        self.assertIn('UNIVERSAL IMAGE PROMPT ENGINEERING SYSTEM', self.calls[-1][1]['messages'][0]['content'])
+        self.assertEqual(len(self.calls[-1][1]['messages'][1]['images']), 3)
+        self.assertEqual(self.calls[-1][1]['options']['num_predict'], 2400)
+        for parameters in ({'mode': 'training'}, {'pipeline': 'flux2_klein'}):
+            r = await self.post(**parameters)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()['negative_prompt'], '')
+            self.assertFalse(r.json()['negative_supported'])
+        self.assertEqual((await self.post(mode='unknown')).status_code, 422)
+
+    async def test_empty_generation_negative_is_not_silently_accepted(self):
+        self.chat_result = {'done': True, 'message': {'content': json.dumps({
+            'caption': 'A person.', 'tags': ['solo'], 'negative_tags': [], 'uncertainties': []})}}
+        self.assertEqual((await self.post()).status_code, 502)
+        self.assertEqual((await self.post(mode='training')).status_code, 200)
+
+    async def test_conflicting_negative_is_removed(self):
+        self.chat_result = {'done': True, 'message': {'content': json.dumps({
+            'caption': 'A person on a white background.', 'tags': ['solo', 'white background'],
+            'negative_tags': ['white background', 'duplicate subject'], 'uncertainties': []})}}
+        response = await self.post()
+        self.assertEqual(response.json()['negative_prompt'], 'duplicate subject')
 
     async def test_auth_before_image_or_backend_processing(self):
         r = await self.post(b'not image', key='wrong')

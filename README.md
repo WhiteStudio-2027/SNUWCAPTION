@@ -129,3 +129,7 @@ JSON 코드 블록, JSON 앞뒤 설명, `positive_prompt`/`negative_prompt` 필�
 대소문자·공백 차이를 포함한 중복을 제거하고, JSON 배열 내부에 한 덩어리로 들어온 쉼표 목록도 정리합니다. `anime character hair` 같은 범주 채우기와 `bad gamma`, `extra clothing`, `extra accessory` 같은 과도한 부정 나열을 제거합니다. 서로 다른 장갑 색, 의상/머리 지역색, 외곽선·채색 방식 같은 실제 차이는 유지합니다.
 
 부정이 누락된 경우에만 최대 한 번 복구하며, 이미 승인된 긍정 설명을 그 복구 결과로 바꾸지 않습니다. `/health`의 build 값은 `grounded-cleanup-3`입니다. 캡션 API 소스 전체(새 quality.py 포함)를 갱신하고 재시작하면 됩니다. 클라이언트 변경은 없습니다.
+
+## 로그
+
+콘솔은 Rich 컬러 로그와 시작 패널을 표시합니다. 저장 로그는 `runtime/logs/caption.log`에 날짜·레벨·이벤트를 일반 텍스트로 기록합니다. ANSI 색상 코드는 저장하지 않으며 5MiB × 최대 백업 3개로 회전합니다. Linux 디렉터리/파일 권한은 700/600입니다. `CAPTION_LOG_DIR`로 위치를 바꿀 수 있습니다. 기존 이미지·프롬프트·API 키 비기록 원칙은 유지합니다.

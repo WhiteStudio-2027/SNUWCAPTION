@@ -5,10 +5,8 @@ from .service import Settings, create_app
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)-7s | %(message)s',
-                        datefmt='%H:%M:%S')
-    for name in ('httpx', 'httpcore'):
-        logging.getLogger(name).setLevel(logging.WARNING)
+    from .logging_setup import configure
+    configure()
     try:
         app = create_app(Settings.from_env())
         host = os.getenv('CAPTION_HOST', '127.0.0.1')
